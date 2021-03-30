@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+    <meta charset="UTF-8">
+</head>
+
+<body>
+    <div>
+        <button id="offer" onclick="makeOffer()">make Offer</button>
+        <button id="anser" onclick="makeAnswer()">make Answer</button>
+        <button id="connect" onclick="connect()">connect</button>
+        <h2>disabled Anonymize local IPs exposed by WebRTC in chrome://flags/</h2>
+        <div>
+            <h1>MyScreen</h1>
+            <video id="my-screen"></video>
+        </div>
+        <div>
+            <h1>PartnerScreen</h1>
+            <video id="peer-screen"></video>
+        </div>
+    </div>
+    <script src="https://cdn.socket.io/3.1.3/socket.io.min.js"
+        integrity="sha384-cPwlPLvBTa3sKAgddT6krw0cJat7egBga3DJepJyrLl4Q9/5WLra3rrnMcyTyOnh"
+        crossorigin="anonymous"></script>
+
+    <script>
+        const socket = io.connect('http://localhost:8080')
+        socket.on("connect", () => {
+            console.log("----connecnted!----")
+        });
+        const myscreen = document.getElementById("my-screen")
+        const peerscreen = document.getElementById("peer-screen")
+        const mysdp = document.getElementById("my-sdp")
+        const peersdp = document.getElementById("peer-sdp")
+        async function startCapture(displayMediaOptions) {
+            let captureStream = null;
+            try {
+                captureStream = await navigator.mediaDevices.getDisplayMedia(displayMediaOptions);
+            } catch (err) {
+                console.error("Error: " + err);
+            }
+            return captureStream;
+        }
+        const options = {
+            audio: true,
+            video: {
+                frameRate: 144
+            }
+        }
+        const configuration = { 'iceServers': [{ 'urls': 'stun:stun.webrtc.ecl.ntt.com:3478' }] }
+        const peerConnection = new RTCPeerConnection(configuration);
+        peerConnection.addEventListener('icecandidate', event => {
+            console.log(event.candidate)
+            if (event.candidate) {
+                socket.emit("ice", event.candidate)
+            }
+        });
+        const remoteStream = new MediaStream();
+        peerscreen.srcObject = remoteStream;
+
+        peerConnection.addEventListener('track', async (event) => {
+            console.log('track: ' + event)
+            remoteStream.addTrack(event.track, remoteStream);
+            peerscreen.play()
+        });
+
+        socket.on("ice", async ice => {
+            console.log(ice)
+            peerConnection.addIceCandidate(ice);
+        })
+
+        socket.on("offer", (offer) => {
+            makeAnswer(offer);
+        })
+        socket.on("answer", async answer => {
+            console.log('ans')
+            console.log(answer)
+            const remoteDesc = new RTCSessionDescription(answer);
+            await peerConnection.setRemoteDescription(remoteDesc)
+        })
+        peerConnection.addEventListener('connectionstatechange', event => {
+            console.log(event)
+            console.log(peerConnection.connectionState)
+            if (peerConnection.connectionState === 'connected') {
+                console.log('p2p')
+            }
+        });
+
+
+        async function makeOffer() {
+            let localStream = await startCapture(options)
+            myscreen.srcObject = localStream;
+            myscreen.play()
+            localStream.getTracks().forEach(track => {
+                peerConnection.addTrack(track, localStream);
+            });
+            const offer = await peerConnection.createOffer()
+            await peerConnection.setLocalDescription(offer)
+            console.log("-----Offer----")
+            console.log(offer)
+            socket.emit("offer", offer)
+        }
+        async function makeAnswer(offer) {
+            peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
+            let localStream = await startCapture(options)
+            myscreen.srcObject = localStream;
+            myscreen.play()
+            localStream.getTracks().forEach(track => {
+                peerConnection.addTrack(track, localStream);
+            });
+            const answer = await peerConnection.createAnswer()
+            await peerConnection.setLocalDescription(answer);
+            socket.emit("answer", answer)
+            console.log("-----Answer----")
+            console.log(answer)
+        }
+    </script>
+</body>
+
+</html>
